@@ -1,0 +1,13 @@
+account,year,month,month_name,since,until,status,source,tweets_collected,error_type,error_message,updated_at_utc
+example_account,2025,1,January,2025-01-01,2025-01-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330551+00:00
+example_account,2025,2,February,2025-02-01,2025-02-28,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330590+00:00
+example_account,2025,3,March,2025-03-01,2025-03-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330677+00:00
+example_account,2025,4,April,2025-04-01,2025-04-30,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330688+00:00
+example_account,2025,5,May,2025-05-01,2025-05-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330694+00:00
+example_account,2025,6,June,2025-06-01,2025-06-30,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330702+00:00
+example_account,2025,7,July,2025-07-01,2025-07-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330709+00:00
+example_account,2025,8,August,2025-08-01,2025-08-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330716+00:00
+example_account,2025,9,September,2025-09-01,2025-09-30,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330724+00:00
+example_account,2025,10,October,2025-10-01,2025-10-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330730+00:00
+example_account,2025,11,November,2025-11-01,2025-11-30,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330737+00:00
+example_account,2025,12,December,2025-12-01,2025-12-31,empty,timeline_full_scan,0,,,2026-03-31T10:54:46.330744+00:00
