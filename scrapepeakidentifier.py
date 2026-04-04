@@ -31,7 +31,6 @@ ClientTransaction.generate_transaction_id = _patched_transaction_id
 
 # --- Config ---
 DEFAULT_YEAR = 2025
-DEFAULT_ACCOUNT = "example_account"
 MAX_TIMELINE_PAGES = 150
 TIMELINE_PAGE_SIZE = 100
 DELAY = 0.2
@@ -51,7 +50,6 @@ analyzer = SentimentIntensityAnalyzer()
 def load_cookies(path):
     with open(path) as f:
         cookies = json.load(f)
-
     return {c["name"]: c["value"] for c in cookies if "name" in c}
 
 
@@ -92,7 +90,7 @@ def build_record(tweet, dt):
 
 # --- Retry wrappers ---
 async def get_user_id(client, account):
-    for i in range(MAX_RETRIES):
+    for _ in range(MAX_RETRIES):
         try:
             print(f"[user lookup] @{account}")
             user = await client.get_user_by_screen_name(account)
@@ -106,13 +104,14 @@ async def get_user_id(client, account):
     return None
 
 
+# 🔥 FIX 1: Use safe tweet_type
 async def get_tweets_page(client, user_id):
-    for i in range(MAX_RETRIES):
+    for _ in range(MAX_RETRIES):
         try:
             print("[timeline] fetching tweets...")
             return await client.get_user_tweets(
                 user_id,
-                tweet_type="TweetsAndReplies",   # 🔑 FIXED
+                tweet_type="Tweets",   # ✅ FIXED (no crash)
                 count=TIMELINE_PAGE_SIZE
             )
         except Exception as e:
@@ -124,15 +123,16 @@ async def get_tweets_page(client, user_id):
     return None
 
 
+# 🔥 FIX 2: Safe pagination
 async def get_next_page(client, user_id, cursor):
-    for i in range(MAX_RETRIES):
+    for _ in range(MAX_RETRIES):
         try:
-            print(f"[pagination] using cursor: {cursor}")
+            print(f"[pagination] cursor: {cursor}")
             return await client.get_user_tweets(
                 user_id,
-                tweet_type="TweetsAndReplies",
+                tweet_type="Tweets",   # ✅ consistent
                 count=TIMELINE_PAGE_SIZE,
-                cursor=cursor   # 🔥 THIS is the fix
+                cursor=cursor
             )
         except Exception as e:
             if "429" in str(e):
@@ -168,6 +168,7 @@ async def scrape(account, year, client):
     while tweets and page <= MAX_TIMELINE_PAGES:
 
         page_dates = []
+        next_cursor = getattr(tweets, "next_cursor", None)
 
         for tweet in tweets:
             try:
@@ -181,7 +182,7 @@ async def scrape(account, year, client):
                 continue
 
             if dt < year_start:
-                print(f"Reached tweets older than {year}. Stopping.")
+                print(f"[stop] Reached tweets older than {year}")
                 return dataset
 
             dataset.append(build_record(tweet, dt))
@@ -189,34 +190,31 @@ async def scrape(account, year, client):
         if page_dates:
             newest_dt = max(page_dates)
             oldest_dt = min(page_dates)
-            newest = newest_dt.strftime("%Y-%m-%d")
-            oldest = oldest_dt.strftime("%Y-%m-%d")
-            next_cursor = getattr(tweets, "next_cursor", None)
 
-            print(f"[page {page}] cursor={next_cursor} | {newest} → {oldest} | total {len(dataset)}")
-            print(f"Oldest tweet so far: {oldest}")
+            print(
+                f"[page {page}] {newest_dt.strftime('%Y-%m-%d')} → "
+                f"{oldest_dt.strftime('%Y-%m-%d')} | total {len(dataset)}"
+            )
 
-            if oldest_dt.year < year:
-                print(f"[stop] Reached tweets older than target year {year}.")
-                return dataset
-
-            if last_oldest_dt is not None and oldest_dt >= last_oldest_dt:
+            # 🔥 FIX 3: better stall detection
+            if last_oldest_dt and oldest_dt >= last_oldest_dt:
                 stalled_pages += 1
-                print(f"[stall] Oldest tweet did not move back. stalled_pages={stalled_pages}")
+                print(f"[stall] {stalled_pages}")
             else:
                 stalled_pages = 0
+
             last_oldest_dt = oldest_dt
 
+            if stalled_pages >= MAX_STALLED_PAGES:
+                print("[stop] pagination stalled")
+                return dataset
+
             if not next_cursor:
-                print("[stop] No next cursor returned.")
+                print("[stop] no cursor")
                 return dataset
 
             if next_cursor in seen_cursors:
-                print(f"[stop] Repeated cursor detected: {next_cursor}")
-                return dataset
-
-            if stalled_pages >= MAX_STALLED_PAGES:
-                print("[stop] Pagination stalled; oldest tweet is repeating.")
+                print("[stop] repeated cursor")
                 return dataset
 
             seen_cursors.add(next_cursor)
@@ -253,7 +251,7 @@ def print_report(df, account, year):
 async def main():
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--account", required=True)
+    parser.add_argument("--account", default="sanchezcastejon")  # ✅ FIX 4
     parser.add_argument("--year", type=int, default=2025)
     args = parser.parse_args()
 
