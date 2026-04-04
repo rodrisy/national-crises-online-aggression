@@ -10,7 +10,7 @@ from twikit.x_client_transaction.transaction import ClientTransaction
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
-# --- Patch Twikit (prevents breaking) ---
+# --- Patch Twikit ---
 async def _patched_init(self, session, headers):
     self.key = "patched"
     self.key_bytes = [0] * 50
@@ -28,8 +28,8 @@ ClientTransaction.generate_transaction_id = _patched_transaction_id
 
 
 # --- Config ---
-DEFAULT_YEAR = 2025
-DELAY = 1  # slower to avoid rate limits
+DELAY = 1.0
+MAX_PAGES = 200
 
 MONTHS = [
     "January","February","March","April","May","June",
@@ -81,37 +81,7 @@ def build_record(tweet, dt):
     }
 
 
-# --- 🔥 NEW: scrape per month ---
-async def scrape_month(client, account, year, month):
-    start = f"{year}-{month:02d}-01"
-
-    if month == 12:
-        end = f"{year+1}-01-01"
-    else:
-        end = f"{year}-{month+1:02d}-01"
-
-    query = f"from:{account} since:{start} until:{end}"
-
-    print(f"[search] {query}")
-
-    try:
-        tweets = await client.search_tweet(query, product="Latest")
-    except Exception as e:
-        print(f"[error] {e}")
-        return []
-
-    results = []
-
-    for tweet in tweets:
-        try:
-            dt = parse_date(tweet.created_at)
-            results.append(build_record(tweet, dt))
-        except:
-            continue
-
-    return results
-
-
+# --- API wrappers ---
 async def get_user_id(client, account):
     try:
         print(f"[user lookup] @{account}")
@@ -121,7 +91,53 @@ async def get_user_id(client, account):
         print(f"[error] user lookup failed: {e}")
         return None
 
-# --- 🔥 MAIN SCRAPER ---
+
+async def get_tweets_page(client, user_id):
+    retries = 0
+
+    while retries < 5:
+        try:
+            return await client.get_user_tweets(
+                user_id,
+                tweet_type="Tweets",
+                count=100
+            )
+        except Exception as e:
+            if "429" in str(e):
+                wait = 30 * (retries + 1)
+                print(f"[rate limit] retry {retries+1}/5 → waiting {wait}s")
+                await asyncio.sleep(wait)
+                retries += 1
+            else:
+                raise
+
+    print("[fail] too many rate limits (initial page)")
+    return None
+
+async def get_next_page(client, user_id, cursor):
+    retries = 0
+
+    while retries < 5:
+        try:
+            return await client.get_user_tweets(
+                user_id,
+                tweet_type="Tweets",
+                count=100,
+                cursor=cursor
+            )
+        except Exception as e:
+            if "429" in str(e):
+                wait = 30 * (retries + 1)
+                print(f"[rate limit] retry {retries+1}/5 → waiting {wait}s")
+                await asyncio.sleep(wait)
+                retries += 1
+            else:
+                raise
+
+    print("[fail] too many rate limits (pagination)")
+    return None
+
+# --- MAIN SCRAPER ---
 async def scrape(account, year, client):
 
     year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
@@ -129,24 +145,25 @@ async def scrape(account, year, client):
 
     user_id = await get_user_id(client, account)
     if not user_id:
-        print("User lookup failed.")
         return []
 
     tweets = await get_tweets_page(client, user_id)
     if not tweets:
-        print("No tweets returned.")
         return []
 
     dataset = []
-    page = 1
     seen_cursors = set()
+    reached_target_year = False
 
-    reached_target_year = False  # 🔥 NEW
+    last_oldest = None
+    stalled_pages = 0
 
-    while tweets and page <= 200:  # 🔥 increased depth
+    page = 1
 
-        page_dates = []
+    while tweets and page <= 200:
+
         next_cursor = getattr(tweets, "next_cursor", None)
+        page_dates = []
 
         for tweet in tweets:
             try:
@@ -156,7 +173,6 @@ async def scrape(account, year, client):
 
             page_dates.append(dt)
 
-            # 🔥 Ignore newer tweets until we reach target year
             if not reached_target_year:
                 if dt.year == year:
                     reached_target_year = True
@@ -167,31 +183,44 @@ async def scrape(account, year, client):
                 continue
 
             if dt < year_start:
-                print(f"[stop] fully passed year {year}")
+                print(f"[stop] passed {year}")
                 return dataset
 
             dataset.append(build_record(tweet, dt))
 
         if page_dates:
-            newest_dt = max(page_dates)
-            oldest_dt = min(page_dates)
+            newest = max(page_dates)
+            oldest = min(page_dates)
 
             print(
-                f"[page {page}] {newest_dt.strftime('%Y-%m-%d')} → "
-                f"{oldest_dt.strftime('%Y-%m-%d')} | total {len(dataset)}"
+                f"[page {page}] {newest.strftime('%Y-%m-%d')} → "
+                f"{oldest.strftime('%Y-%m-%d')} | total {len(dataset)}"
             )
 
-            if not next_cursor:
-                print("[stop] no cursor")
-                return dataset
+            # 🔥 NEW: detect if we're stuck in same date range
+            if last_oldest and oldest >= last_oldest:
+                stalled_pages += 1
+                print(f"[stall detected] {stalled_pages}")
+            else:
+                stalled_pages = 0
 
-            if next_cursor in seen_cursors:
-                print("[stop] repeated cursor")
-                return dataset
+            last_oldest = oldest
 
-            seen_cursors.add(next_cursor)
+            if stalled_pages >= 3:
+                print("[stop] stuck in recent tweets (Twikit limitation)")
+                break
 
-        await asyncio.sleep(0.5)
+        if not next_cursor:
+            print("[stop] no cursor")
+            break
+
+        if next_cursor in seen_cursors:
+            print("[stop] repeated cursor")
+            break
+
+        seen_cursors.add(next_cursor)
+
+        await asyncio.sleep(DELAY)
         tweets = await get_next_page(client, user_id, next_cursor)
         page += 1
 
