@@ -1,9 +1,7 @@
 import asyncio
 import argparse
-import calendar
 import json
 import re
-import sys
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -12,7 +10,7 @@ from twikit.x_client_transaction.transaction import ClientTransaction
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
-# --- Patch Twikit transaction (prevents breakage) ---
+# --- Patch Twikit (prevents breaking) ---
 async def _patched_init(self, session, headers):
     self.key = "patched"
     self.key_bytes = [0] * 50
@@ -31,12 +29,7 @@ ClientTransaction.generate_transaction_id = _patched_transaction_id
 
 # --- Config ---
 DEFAULT_YEAR = 2025
-MAX_TIMELINE_PAGES = 150
-TIMELINE_PAGE_SIZE = 100
-DELAY = 0.2
-MAX_RETRIES = 2
-RETRY_WAIT = 30
-MAX_STALLED_PAGES = 2
+DELAY = 1  # slower to avoid rate limits
 
 MONTHS = [
     "January","February","March","April","May","June",
@@ -88,62 +81,47 @@ def build_record(tweet, dt):
     }
 
 
-# --- Retry wrappers ---
+# --- 🔥 NEW: scrape per month ---
+async def scrape_month(client, account, year, month):
+    start = f"{year}-{month:02d}-01"
+
+    if month == 12:
+        end = f"{year+1}-01-01"
+    else:
+        end = f"{year}-{month+1:02d}-01"
+
+    query = f"from:{account} since:{start} until:{end}"
+
+    print(f"[search] {query}")
+
+    try:
+        tweets = await client.search_tweet(query, product="Latest")
+    except Exception as e:
+        print(f"[error] {e}")
+        return []
+
+    results = []
+
+    for tweet in tweets:
+        try:
+            dt = parse_date(tweet.created_at)
+            results.append(build_record(tweet, dt))
+        except:
+            continue
+
+    return results
+
+
 async def get_user_id(client, account):
-    for _ in range(MAX_RETRIES):
-        try:
-            print(f"[user lookup] @{account}")
-            user = await client.get_user_by_screen_name(account)
-            return user.id
-        except Exception as e:
-            if "429" in str(e):
-                print("Rate limit. Waiting...")
-                await asyncio.sleep(RETRY_WAIT)
-            else:
-                raise
-    return None
+    try:
+        print(f"[user lookup] @{account}")
+        user = await client.get_user_by_screen_name(account)
+        return user.id
+    except Exception as e:
+        print(f"[error] user lookup failed: {e}")
+        return None
 
-
-# 🔥 FIX 1: Use safe tweet_type
-async def get_tweets_page(client, user_id):
-    for _ in range(MAX_RETRIES):
-        try:
-            print("[timeline] fetching tweets...")
-            return await client.get_user_tweets(
-                user_id,
-                tweet_type="Tweets",   # ✅ FIXED (no crash)
-                count=TIMELINE_PAGE_SIZE
-            )
-        except Exception as e:
-            if "429" in str(e):
-                print("Rate limit. Waiting...")
-                await asyncio.sleep(RETRY_WAIT)
-            else:
-                raise
-    return None
-
-
-# 🔥 FIX 2: Safe pagination
-async def get_next_page(client, user_id, cursor):
-    for _ in range(MAX_RETRIES):
-        try:
-            print(f"[pagination] cursor: {cursor}")
-            return await client.get_user_tweets(
-                user_id,
-                tweet_type="Tweets",   # ✅ consistent
-                count=TIMELINE_PAGE_SIZE,
-                cursor=cursor
-            )
-        except Exception as e:
-            if "429" in str(e):
-                print("Rate limit during pagination. Waiting...")
-                await asyncio.sleep(RETRY_WAIT)
-            else:
-                raise
-    return None
-
-
-# --- Main scraping ---
+# --- 🔥 MAIN SCRAPER ---
 async def scrape(account, year, client):
 
     year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
@@ -162,10 +140,10 @@ async def scrape(account, year, client):
     dataset = []
     page = 1
     seen_cursors = set()
-    last_oldest_dt = None
-    stalled_pages = 0
 
-    while tweets and page <= MAX_TIMELINE_PAGES:
+    reached_target_year = False  # 🔥 NEW
+
+    while tweets and page <= 200:  # 🔥 increased depth
 
         page_dates = []
         next_cursor = getattr(tweets, "next_cursor", None)
@@ -178,11 +156,18 @@ async def scrape(account, year, client):
 
             page_dates.append(dt)
 
+            # 🔥 Ignore newer tweets until we reach target year
+            if not reached_target_year:
+                if dt.year == year:
+                    reached_target_year = True
+                else:
+                    continue
+
             if dt > year_end:
                 continue
 
             if dt < year_start:
-                print(f"[stop] Reached tweets older than {year}")
+                print(f"[stop] fully passed year {year}")
                 return dataset
 
             dataset.append(build_record(tweet, dt))
@@ -196,19 +181,6 @@ async def scrape(account, year, client):
                 f"{oldest_dt.strftime('%Y-%m-%d')} | total {len(dataset)}"
             )
 
-            # 🔥 FIX 3: better stall detection
-            if last_oldest_dt and oldest_dt >= last_oldest_dt:
-                stalled_pages += 1
-                print(f"[stall] {stalled_pages}")
-            else:
-                stalled_pages = 0
-
-            last_oldest_dt = oldest_dt
-
-            if stalled_pages >= MAX_STALLED_PAGES:
-                print("[stop] pagination stalled")
-                return dataset
-
             if not next_cursor:
                 print("[stop] no cursor")
                 return dataset
@@ -219,7 +191,7 @@ async def scrape(account, year, client):
 
             seen_cursors.add(next_cursor)
 
-        await asyncio.sleep(DELAY)
+        await asyncio.sleep(0.5)
         tweets = await get_next_page(client, user_id, next_cursor)
         page += 1
 
@@ -234,6 +206,7 @@ def print_report(df, account, year):
 
     for m in range(1, 13):
         sub = df[df["month"] == m]
+
         if sub.empty:
             print(f"{MONTHS[m-1]:<10} —")
             continue
@@ -251,7 +224,7 @@ def print_report(df, account, year):
 async def main():
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--account", default="sanchezcastejon")  # ✅ FIX 4
+    parser.add_argument("--account", default="sanchezcastejon")
     parser.add_argument("--year", type=int, default=2025)
     args = parser.parse_args()
 
