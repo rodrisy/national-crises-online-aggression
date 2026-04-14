@@ -1,0 +1,26 @@
+{
+  "Political Actors": {
+    "total_tweets": 4002,
+    "avg_sentiment": -0.075,
+    "std_sentiment": 0.282,
+    "pct_negative": 29.6,
+    "pct_neutral": 57.4,
+    "pct_positive": 13.0
+  },
+  "News Outlets": {
+    "total_tweets": 3822,
+    "avg_sentiment": -0.003,
+    "std_sentiment": 0.232,
+    "pct_negative": 14.8,
+    "pct_neutral": 71.1,
+    "pct_positive": 14.1
+  },
+  "General Public": {
+    "total_tweets": 1165,
+    "avg_sentiment": -0.114,
+    "std_sentiment": 0.341,
+    "pct_negative": 38.2,
+    "pct_neutral": 47.1,
+    "pct_positive": 14.7
+  }
+}
