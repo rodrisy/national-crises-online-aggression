@@ -1,0 +1,4 @@
+likes_baseline_median,likes_crisis_median,likes_change_pct,likes_p_value,retweets_baseline_median,retweets_crisis_median,retweets_change_pct,retweets_p_value,replies_baseline_median,replies_crisis_median,replies_change_pct,replies_p_value,group
+2279.0,2432.5,6.7,0.0242,788.0,852.0,8.1,0.0012,435.0,342.5,-21.3,0.0002,Political Actors
+7.0,9.0,28.6,0.0001,3.0,3.0,0.0,0.0033,1.0,1.0,0.0,0.0001,News Outlets
+0.0,0.0,0.0,0.0747,0.0,0.0,0.0,0.0179,0.0,0.0,0.0,0.5089,General Public
